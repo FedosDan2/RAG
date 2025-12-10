@@ -103,6 +103,8 @@ data/dataset.json
 Просто выполните:
 
 ```bash
+git pull git@github.com:FedosDan2/RAG.git
+cd RAG 
 python rag/main.py
 ```
 
