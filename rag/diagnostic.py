@@ -156,3 +156,40 @@ class DiagnosticSession:
                 best_gain = gain
                 best_qid = qid
         return best_qid
+    
+    def get_state_json(self, question_id: str = None, answer: Any = None) -> dict:
+        """Возвращает JSON-совместимый словарь текущего состояния сессии."""
+        # Сортировка диагнозов по убыванию вероятности
+        sorted_indices = np.argsort(self.probs)[::-1]
+        diagnoses_list = []
+        for idx in sorted_indices:
+            diagnoses_list.append({
+                "name": self.diagnoses[idx]["name"],
+                "probability": round(float(self.probs[idx]), 4)
+            })
+        
+        # Текущий вопрос (если передан)
+        current_q = None
+        if question_id is not None and answer is not None:
+            q_text = self.questions_db.get(question_id, {}).get("text", "unknown")
+            current_q = {
+                "id": question_id,
+                "text": q_text,
+                "answer": answer
+            }
+        
+        # История всех предыдущих вопросов-ответов
+        history_list = []
+        for qid, ans in self.history:
+            q_text = self.questions_db.get(qid, {}).get("text", "unknown")
+            history_list.append({
+                "question_id": qid,
+                "question_text": q_text,
+                "answer": ans
+            })
+        
+        return {
+            "current_question": current_q,
+            "diagnoses": diagnoses_list,
+            "history": history_list
+        }

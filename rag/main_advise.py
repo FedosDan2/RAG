@@ -4,6 +4,7 @@ from rag.rag_offical_lib import RAGOfficial
 from rag.detect_objects.entry_point import get_features
 from rag.diagnostic import DiagnosticSession
 import json
+from datetime import datetime
 
 
 class MainAdvise:
@@ -151,7 +152,8 @@ class MainAdvise:
             probs = [s/total_score for s in initial_scores]
         
         session = DiagnosticSession(diagnoses_objects, questions_db, probs)
-        
+        self._save_step(0, None, None, session)
+
         print("\n📊 Предварительные вероятности диагнозов (на основе ваших жалоб):")
         for i, diag in enumerate(diagnoses_objects):
             print(f"   {i+1}. {diag['name']}: {session.probs[i]:.1%}")
@@ -173,6 +175,7 @@ class MainAdvise:
             question = questions_db[next_qid]
             answer = self._ask_question(question)
             session.update(next_qid, answer)
+            self._save_step(step, question, answer, session)
             
             print("\n📊 Текущие вероятности после ответа:")
             sorted_indices = np.argsort(session.probs)[::-1]
@@ -215,7 +218,23 @@ class MainAdvise:
             "recommended_doctors": session.diagnoses[session.probs.argmax()].get("required_doctors", [])
         }
         
-        with open("consultation_result.json", "w", encoding="utf-8") as f:
+        with open("dialog/consultation_result.json", "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        print("\n✅ Результат сохранён в 'consultation_result.json'")
+        print("\n✅ Результат сохранён в 'dialog/consultation_result.json'")
+
+    
+    def _save_step(self, step_num: int, question: dict, answer: Any, session: DiagnosticSession):
+        """Сохраняет состояние после ответа в JSON-файл."""
+        if question is not None and answer is not None:
+            state = session.get_state_json(question["id"], answer)
+        else:
+            state = session.get_state_json(None, None)   # начальное состояние
+        
+        state["step"] = step_num
+        state["timestamp"] = datetime.now().isoformat()
+        
+        filename = f"dialog/steps/consultation_step_{step_num:02d}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        print(f"   📄 Состояние сохранено в {filename}")
