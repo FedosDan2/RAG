@@ -3,6 +3,8 @@ from typing import Any
 from rag.rag_offical_lib import RAGOfficial
 from rag.detect_objects.entry_point import get_features
 from rag.diagnostic import DiagnosticSession
+import json
+
 
 class MainAdvise:
     def __init__(self, embedding_model, device):
@@ -62,7 +64,7 @@ class MainAdvise:
             min_val, max_val = scale_range[0], scale_range[-1]
             print(f"\n❓ {text} (от {min_val} до {max_val})")
             while True:
-                ans = input("➡️ ").strip()
+                ans = input("➡️  ").strip()
                 try:
                     val = float(ans)
                     if min_val <= val <= max_val:
@@ -84,8 +86,20 @@ class MainAdvise:
             print("Вы не ввели жалобы. Завершение работы.")
             return None
         
+        import re
+
+        symptoms_list = complaint.split()
+        symptoms_list = [re.sub(r'[^\w\s]', '', word) for word in symptoms_list]  # убираем пунктуацию
+        symptoms_list = [word for word in symptoms_list if len(word) > 2]
+        symptoms_list = list(set(symptoms_list))
+        symptoms_str = ' '.join(symptoms_list)  
+        # Извлечение симптомов и лекарств
+        # symptoms, medication = get_features(complaint, self.device)
+        # symptoms.extend(medication)
+        # symptoms_str = ' '.join(symptoms)
+
         # Поиск в RAG
-        retrieved = self.rag._retrieve_relevant_facts(complaint, complaint, top_k=5)
+        retrieved = self.rag._retrieve_relevant_facts(complaint, symptoms_str, top_k=5)
         if not retrieved:
             print("\nК сожалению, я не смог найти подходящие диагнозы в моей базе.")
             print("Рекомендую обратиться к врачу очно для детального обследования.")
@@ -172,18 +186,36 @@ class MainAdvise:
         print(f"📋 Рекомендованные анализы: {', '.join(best_diag.get('required_tests', []))}")
         print(f"👨‍⚕️ Врачи: {', '.join(best_diag.get('required_doctors', []))}")
         
-        self._save_consultation(complaint, complaint, session, questions_db)
+        self._save_consultation(complaint, symptoms_list, session, questions_db)
     
     def _save_consultation(self, complaint, symptoms, session, questions_db):
-        with open("consultation_result.txt", "w", encoding="utf-8") as f:
-            f.write(f"Жалобы: {complaint}\n")
-            f.write(f"Извлечённые симптомы: {', '.join(symptoms)}\n\n")
-            f.write("История вопросов и ответов:\n")
-            for qid, ans in session.history:
-                q_text = questions_db[qid]['text']
-                f.write(f"Вопрос: {q_text}\n")
-                f.write(f"Ответ: {ans}\n\n")
-            f.write("Финальные вероятности диагнозов:\n")
-            for diag, prob in zip(session.diagnoses, session.probs):
-                f.write(f"{diag['name']}: {prob:.1%}\n")
-        print("\n✅ Результат сохранён в 'consultation_result.txt'.")
+        # Подготавливаем данные для JSON
+        history_list = []
+        for qid, ans in session.history:
+            q_text = questions_db[qid]['text']
+            history_list.append({
+                "question_id": qid,
+                "question_text": q_text,
+                "answer": ans
+            })
+        
+        final_probs = []
+        for diag, prob in zip(session.diagnoses, session.probs):
+            final_probs.append({
+                "diagnosis_name": diag['name'],
+                "probability": float(prob)  # np.float64 -> float
+            })
+        
+        result = {
+            "complaint": complaint,
+            "extracted_symptoms": symptoms,   # список слов
+            "history": history_list,
+            "final_probabilities": final_probs,
+            "recommended_tests": session.diagnoses[session.probs.argmax()].get("required_tests", []),
+            "recommended_doctors": session.diagnoses[session.probs.argmax()].get("required_doctors", [])
+        }
+        
+        with open("consultation_result.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        
+        print("\n✅ Результат сохранён в 'consultation_result.json'")
