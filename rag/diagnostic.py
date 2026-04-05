@@ -1,11 +1,16 @@
+import math
 import numpy as np
 from typing import List, Dict, Optional, Any
 
 class DiagnosticSession:
-    """Состояние адаптивного опроса."""
     def __init__(self, diagnoses: List[dict], questions_db: Dict[str, dict], initial_probs: List[float]):
-        self.diagnoses = diagnoses          # список объектов заболеваний (с полями name, required_tests, required_doctors)
-        self.questions_db = questions_db    # словарь {question_id: question}
+        """
+        diagnoses: список словарей, каждый содержит "id" и "name"
+        questions_db: словарь {question_id: question_object}
+        initial_probs: начальные вероятности
+        """
+        self.diagnoses = diagnoses          # список с полями id, name, required_tests, required_doctors
+        self.questions_db = questions_db
         self.probs = np.array(initial_probs, dtype=float)
         self.asked_questions = set()
         self.history = []                   # (question_id, answer)
@@ -19,13 +24,11 @@ class DiagnosticSession:
         options = q.get("options", [])
         applicable = q.get("applicable_to", {})
         
-        print(f"\n[DEBUG] Обновление по вопросу {question_id}, тип={q_type}, ответ={answer}")
-        
         likelihood = []
-        for i, diag in enumerate(self.diagnoses):
-            diag_name = diag["name"]
-            if diag_name in applicable:
-                probs_for_diag = applicable[diag_name]
+        for diag in self.diagnoses:
+            diag_id = diag["id"]            # используем ID для поиска
+            if diag_id in applicable:
+                probs_for_diag = applicable[diag_id]
                 if q_type == "yes_no":
                     prob = probs_for_diag.get(answer, {}).get("p", 0.5)
                 elif q_type == "single_choice":
@@ -39,18 +42,29 @@ class DiagnosticSession:
                         else:
                             prob *= (1 - p_present)
                 elif q_type == "scale":
-                    # Приводим ответ к строке, если нужно
-                    ans_key = str(answer)
-                    # Пытаемся найти точное совпадение, иначе ищем по интервалам (упрощённо)
-                    if ans_key in probs_for_diag:
-                        prob = probs_for_diag[ans_key].get("p", 0.0)
+                    # Сопоставляем числовой ответ с интервалами
+                    val = float(answer)
+                    matched_key = None
+                    for key in probs_for_diag.keys():
+                        if key.startswith("<") and val < float(key[1:]):
+                            matched_key = key
+                            break
+                        elif key.startswith(">") and val > float(key[1:]):
+                            matched_key = key
+                            break
+                        elif "-" in key:
+                            low, high = map(float, key.split("-"))
+                            if low <= val <= high:
+                                matched_key = key
+                                break
+                    if matched_key:
+                        prob = probs_for_diag[matched_key].get("p", 0.0)
                     else:
-                        # Для шкалы можно интерполировать, но для простоты возьмём 0
                         prob = 0.0
                 else:
                     prob = 0.5
             else:
-                # Нейтральное распределение
+                # нейтральное распределение
                 if q_type == "yes_no":
                     prob = 0.5
                 elif q_type == "single_choice":
@@ -58,11 +72,13 @@ class DiagnosticSession:
                 elif q_type == "multi_choice":
                     prob = 0.5 ** len(options)
                 elif q_type == "scale":
-                    prob = 1.0 / len(q.get("scale_range", [1,5]))
+                    # Для шкалы по умолчанию равномерная вероятность по всем интервалам
+                    # Возьмём количество интервалов из первого попавшегося диагноза
+                    intervals = list(applicable.values())[0].keys() if applicable else []
+                    prob = 1.0 / len(intervals) if intervals else 0.5
                 else:
                     prob = 0.5
             likelihood.append(prob)
-            print(f"   {diag_name}: P(answer|diag) = {prob:.4f}")
         
         likelihood = np.array(likelihood)
         new_probs = self.probs * likelihood
@@ -74,10 +90,6 @@ class DiagnosticSession:
         
         self.asked_questions.add(question_id)
         self.history.append((question_id, answer))
-        
-        print(f"   Нормировочная сумма = {total:.4f}")
-        for i, diag in enumerate(self.diagnoses):
-            print(f"   {diag['name']}: новая вероятность = {self.probs[i]:.4f}")
     
     def information_gain(self, question_id: str) -> float:
         q = self.questions_db[question_id]
@@ -90,14 +102,13 @@ class DiagnosticSession:
         elif q_type == "single_choice":
             outcomes = options
         elif q_type == "multi_choice":
-            # Для простоты не используем multi_choice при выборе вопроса
             return 0.0
         elif q_type == "scale":
-            # Собираем все возможные значения из applicable_to
-            values = set()
-            for diag_name, probs in applicable.items():
-                values.update(probs.keys())
-            outcomes = sorted(values, key=lambda x: float(x) if x.replace('.','',1).isdigit() else 0)
+            # Собираем все возможные интервалы из applicable_to
+            intervals = set()
+            for probs in applicable.values():
+                intervals.update(probs.keys())
+            outcomes = sorted(intervals, key=lambda x: float(x.split('-')[0].replace('<','').replace('>','')) if x[0] in '<>' else float(x.split('-')[0]))
         else:
             return 0.0
         
@@ -107,14 +118,14 @@ class DiagnosticSession:
             prob_answer = 0.0
             post_probs = []
             for i, diag in enumerate(self.diagnoses):
-                diag_name = diag["name"]
-                if diag_name in applicable:
+                diag_id = diag["id"]
+                if diag_id in applicable:
                     if q_type == "yes_no":
-                        p_ans = applicable[diag_name].get(answer, {}).get("p", 0.5)
+                        p_ans = applicable[diag_id].get(answer, {}).get("p", 0.5)
                     elif q_type == "single_choice":
-                        p_ans = applicable[diag_name].get(answer, {}).get("p", 1.0/len(options))
+                        p_ans = applicable[diag_id].get(answer, {}).get("p", 1.0/len(options))
                     elif q_type == "scale":
-                        p_ans = applicable[diag_name].get(str(answer), {}).get("p", 0.0)
+                        p_ans = applicable[diag_id].get(answer, {}).get("p", 0.0)
                     else:
                         p_ans = 0.5
                 else:
@@ -138,7 +149,6 @@ class DiagnosticSession:
         for qid, q in self.questions_db.items():
             if qid in self.asked_questions:
                 continue
-            # Пропускаем multi_choice (возвращает 0)
             if q["type"] == "multi_choice":
                 continue
             gain = self.information_gain(qid)

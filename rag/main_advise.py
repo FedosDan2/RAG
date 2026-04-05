@@ -84,45 +84,43 @@ class MainAdvise:
             print("Вы не ввели жалобы. Завершение работы.")
             return None
         
-        # Извлечение симптомов и лекарств
-        symptoms, medication = get_features(complaint, self.device)
-        symptoms.extend(medication)
-        symptoms_str = ' '.join(symptoms)
-        
         # Поиск в RAG
-        retrieved = self.rag._retrieve_relevant_facts(complaint, symptoms_str, top_k=5)
+        retrieved = self.rag._retrieve_relevant_facts(complaint, complaint, top_k=5)
         if not retrieved:
             print("\nК сожалению, я не смог найти подходящие диагнозы в моей базе.")
             print("Рекомендую обратиться к врачу очно для детального обследования.")
             return None
         
-        # Объединяем диагнозы по имени
+        # Объединяем диагнозы по id (а не по имени)
         diag_map = {}
         for fact in retrieved:
-            name = fact["name"]
-            if name not in diag_map:
-                diag_map[name] = {
-                    "name": name,
+            diag_id = fact.get("id")          # предполагаем, что в diseases.json есть поле "id"
+            diag_name = fact["name"]
+            if diag_id not in diag_map:
+                diag_map[diag_id] = {
+                    "id": diag_id,
+                    "name": diag_name,
                     "required_tests": set(fact.get("required_tests", [])),
                     "required_doctors": set(fact.get("required_doctors", [])),
-                    "questions": [],       # собираем уникальные вопросы по id
+                    "questions": [],
                     "max_score": fact.get("relevance_score", 0.0)
                 }
             else:
-                diag_map[name]["required_tests"].update(fact.get("required_tests", []))
-                diag_map[name]["required_doctors"].update(fact.get("required_doctors", []))
-                diag_map[name]["max_score"] = max(diag_map[name]["max_score"], fact.get("relevance_score", 0.0))
+                diag_map[diag_id]["required_tests"].update(fact.get("required_tests", []))
+                diag_map[diag_id]["required_doctors"].update(fact.get("required_doctors", []))
+                diag_map[diag_id]["max_score"] = max(diag_map[diag_id]["max_score"], fact.get("relevance_score", 0.0))
             # Собираем вопросы
             for q in fact.get("questions", []):
-                if q["id"] not in [q2["id"] for q2 in diag_map[name]["questions"]]:
-                    diag_map[name]["questions"].append(q)
+                if q["id"] not in [q2["id"] for q2 in diag_map[diag_id]["questions"]]:
+                    diag_map[diag_id]["questions"].append(q)
         
         diagnoses_objects = []
         initial_scores = []
         questions_db = {}
-        for name, data in diag_map.items():
+        for diag_id, data in diag_map.items():
             diagnoses_objects.append({
-                "name": name,
+                "id": diag_id,
+                "name": data["name"],
                 "required_tests": list(data["required_tests"]),
                 "required_doctors": list(data["required_doctors"])
             })
@@ -174,7 +172,7 @@ class MainAdvise:
         print(f"📋 Рекомендованные анализы: {', '.join(best_diag.get('required_tests', []))}")
         print(f"👨‍⚕️ Врачи: {', '.join(best_diag.get('required_doctors', []))}")
         
-        self._save_consultation(complaint, symptoms, session, questions_db)
+        self._save_consultation(complaint, complaint, session, questions_db)
     
     def _save_consultation(self, complaint, symptoms, session, questions_db):
         with open("consultation_result.txt", "w", encoding="utf-8") as f:
